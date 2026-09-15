@@ -1,0 +1,50 @@
+{
+  "name": "pi-google-drive",
+  "version": "0.1.0",
+  "description": "Read-only Pi extension for Google Drive, Docs, Sheets, and Slides using user OAuth",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/petrus-jvrensburg/pi-google-drive.git"
+  },
+  "homepage": "https://github.com/petrus-jvrensburg/pi-google-drive#readme",
+  "bugs": {
+    "url": "https://github.com/petrus-jvrensburg/pi-google-drive/issues"
+  },
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-extension",
+    "coding-agent",
+    "google-drive",
+    "google-docs",
+    "google-sheets",
+    "google-slides",
+    "oauth"
+  ],
+  "files": [
+    "extensions",
+    "skills",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.ts"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/index.ts"
+    ],
+    "skills": [
+      "./skills"
+    ]
+  }
+}
