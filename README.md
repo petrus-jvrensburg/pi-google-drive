@@ -2,9 +2,7 @@
 
 Read-only [Pi](https://pi.dev) extension for **Google Drive, Docs, Sheets, and Slides**. After a one-time browser OAuth login, the model can search and read files the signed-in Google account can already see — including Shared Drives.
 
-This package is **not** an MCP proxy. It registers native `pi.registerTool()` tools.
-
-Default scopes are read-only. There are no write tools in v1.
+Native `pi.registerTool()` tools, not an MCP proxy. Default scopes are read-only; there are no write tools. See [Limitations](#limitations) before extending it.
 
 ## Install
 
@@ -19,8 +17,6 @@ pi install /absolute/path/to/pi-google-drive
 ```
 
 Restart Pi, or run `/reload` in an existing session.
-
-A later `pi install npm:pi-google-drive` path may be added once the package is published to npm.
 
 ## One-time Google Cloud setup
 
@@ -98,20 +94,68 @@ Commands: `/gdrive-setup`, `/gdrive-logout`, `/gdrive-status`.
 
 The tools search before they need a file id. Prefer `gsheets_read` with a range over asking `gdrive_read` to dump an entire workbook.
 
+## Limitations
+
+Current constraints:
+
+### Setup and auth
+
+- `/gdrive-setup` needs interactive UI (TUI or RPC). `pi -p` / JSON mode cannot finish OAuth.
+- Bring-your-own Google Cloud **Desktop** OAuth client. This package will not ship a shared client secret.
+- Consent screen in **Testing** only works for listed test users. Unverified apps show Google’s warning; Workspace admins can block them.
+- OAuth loopback callback waits **3 minutes**, then times out.
+- `/gdrive-logout` deletes `~/.pi/agent/google-drive/oauth.json` only. The Google grant remains until the user revokes it.
+- Scopes: `drive.readonly` and `spreadsheets.readonly`. Docs and Slides go through Drive export. The Docs JSON → Markdown fallback may 403 because `documents.readonly` is not requested; plain-text export is the last resort.
+
+### IDs, search, and listing
+
+- Tools take Drive **file ids** (and spreadsheet ids). They do **not** parse `docs.google.com` / `drive.google.com` URLs.
+- There is no `gdrive_recent` and no folder-path breadcrumbs. The model must search or walk parents.
+- Search/list `pageSize` defaults to **20**, max **50**. `orderBy` is not sent with `corpora=allDrives` (unsupported); results are sorted client-side.
+- Drive `name contains` / `fullText contains` is literal, not Google’s consumer search box.
+
+### Reads
+
+- **Read-only.** No upload, create, update, delete, or sharing.
+- `gdrive_read` on a spreadsheet exports **the first tab as CSV**. Other tabs and A1 ranges need `gsheets_read`.
+- `gsheets_read` defaults to **200** rows, max **500**. Unbounded ranges are still sliced.
+- Tool text is truncated at **~50KB / 2000 lines**. Media downloads over **5MB** are refused. Nothing is written to a temp file.
+- **Not extracted:** PDF, images, Office binaries, Google Forms, Drawings, Maps. Use `gdrive_get` for metadata.
+- Slides are **plain text**, not structured speaker notes / slide objects.
+- No export-to-local-file helper (PDF/DOCX/XLSX/PPTX on disk).
+- No Doc comments or suggested edits.
+- Missing auth returns “run `/gdrive-setup`”. The extension does not crash Pi.
+
+### Out of scope
+
+- npm publishing
+- Gmail, Calendar, Chat, Tasks
+- MCP client / wrapping a giant Workspace MCP
+- Service accounts or domain-wide delegation (user OAuth is the product)
+- Write tools without an explicit follow-up and a confirm gate
+
+## Where to focus next
+
+Highest leverage, in order:
+
+1. **Accept Drive/Docs/Sheets URLs** in `gdrive_get` / `gdrive_read` / `gsheets_read`, and add `gdrive_recent`. Most prompts are a link, not an id.
+2. **Confirm-gated export to a local file** for PDF/DOCX/XLSX so Pi’s `read` tool can take over. Optional cheap PDF text for small files only.
+3. **Tiny write surface**, off by default (`drive.file` or a `/gdrive-writes` flag), always `ctx.ui.confirm`: upload, `gsheets_update` for a range, `gdocs_append`. No delete, no share, no replace-entire-doc.
+4. **Recorded HTTP fixtures** for Shared Drive `files.list`, shortcut follow, 401 refresh, and a fat sheet truncation. Still no live OAuth in CI.
+
+Keep the tool catalog small.
+
 ## Behavior notes
 
-- **Visibility** matches the signed-in user, including Shared Drives (`supportsAllDrives` / `includeItemsFromAllDrives`).
-- **Read-only.** The model is instructed not to offer Drive writes.
-- **Truncation.** Tool output is capped around 50KB / 2000 lines. Downloads over 5MB are refused. Narrow the query, folder, MIME type, or sheet range.
-- **PDF / images / other binaries** are not extracted in v1. Metadata is available via `gdrive_get`.
-- **Docs → Markdown** uses Drive export, with a Docs JSON converter as fallback.
-- Missing auth returns a “run `/gdrive-setup`” error. It does not crash Pi.
+- Visibility matches the signed-in user, including Shared Drives (`supportsAllDrives` / `includeItemsFromAllDrives`). Search defaults to `corpora=allDrives` and retries without that corpora if Google rejects it.
+- Docs → Markdown uses Drive `text/markdown` export, then Docs JSON conversion, then `text/plain`.
+- Shortcuts are followed (capped depth). Folders must be listed with `gdrive_list`, not read.
 
 ## Security
 
 Tokens are stored at `~/.pi/agent/google-drive/oauth.json` with mode `0600`.
 
-Never put OAuth client secrets, refresh tokens, or `.env` contents in git, issues, or chat logs. This repository is public and company-neutral on purpose.
+Never put OAuth client secrets, refresh tokens, or `.env` contents in git, issues, or chat logs.
 
 The status tool and `/gdrive-status` redact credentials. Error messages strip common Google token prefixes.
 
