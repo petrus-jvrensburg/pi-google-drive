@@ -1,6 +1,7 @@
 import { DOCS_API, DRIVE_API, FILE_LIST_FIELDS, SHEETS_API } from "./constants.ts";
 import { asJsonMap, asString, googleErrorMessage, parseJson, type JsonMap } from "./format.ts";
-import { getValidConfig, refreshConfig, type AuthConfig } from "./oauth.ts";
+import { getActiveCwd } from "./config-path.ts";
+import { getAuthorizedConfig, refreshConfig, type AuthConfig } from "./oauth.ts";
 
 export type QueryValue = string | number | boolean | undefined;
 
@@ -36,7 +37,8 @@ async function authorizedFetch(
   init: RequestInit,
   signal?: AbortSignal,
 ): Promise<{ res: Response; config: AuthConfig }> {
-  let config = await getValidConfig(signal);
+  const cwd = getActiveCwd();
+  let { config, path } = await getAuthorizedConfig(signal, cwd);
   const make = (accessToken: string) =>
     fetch(url, {
       ...init,
@@ -49,7 +51,7 @@ async function authorizedFetch(
 
   let res = await make(config.tokens.access_token);
   if (res.status === 401 && config.tokens.refresh_token) {
-    config = await refreshConfig(config, signal);
+    config = await refreshConfig(config, path, signal);
     res = await make(config.tokens.access_token);
   }
   return { res, config };

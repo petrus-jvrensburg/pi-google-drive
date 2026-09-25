@@ -1,20 +1,34 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { resolve } from "node:path";
 import { OAUTH_TIMEOUT_MS } from "./constants.ts";
 import { driveAboutUser } from "./client.ts";
 import {
+  findProjectConfigPath,
+  legacyConfigPath,
+  projectConfigPath,
+  projectRootFromConfigPath,
+  resolveSetupPath,
+  setActiveCwd,
+} from "./config-path.ts";
+import {
   buildAuthUrl,
-  CONFIG_PATH,
   createOAuthState,
   createPkcePair,
   deleteConfig,
   exchangeCodeForTokens,
   formatPublicStatus,
-  readConfig,
+  getValidConfig,
+  publicStatusFor,
+  readConfigFile,
   saveConfig,
   startOAuthListener,
+  statusLabel,
   toPublicStatus,
   type AuthConfig,
 } from "./oauth.ts";
+
+const OVERWRITE_LOGIN = "Overwrite the login found above this directory";
+const SEPARATE_LOGIN = "Save a separate login for this directory";
 
 async function openBrowser(pi: ExtensionAPI, url: string): Promise<void> {
   const platform = process.platform;
@@ -29,20 +43,76 @@ async function openBrowser(pi: ExtensionAPI, url: string): Promise<void> {
   await pi.exec("xdg-open", [url]);
 }
 
+async function maybeCopyLegacy(ctx: ExtensionCommandContext, writePath: string): Promise<"done" | "continue"> {
+  const legacy = legacyConfigPath();
+  const legacyConfig = await readConfigFile(legacy);
+  if (!legacyConfig) return "continue";
+
+  const copy = await ctx.ui.confirm(
+    "Existing Google Drive login",
+    `A login exists at the old global path and is not used by projects:\n${legacy}\n\nCopy it to:\n${writePath}?`,
+  );
+  if (!copy) return "continue";
+
+  await saveConfig(legacyConfig, writePath);
+  try {
+    let config = await getValidConfig(undefined, ctx.cwd);
+    const account = await driveAboutUser();
+    if (account.email || account.displayName) {
+      config = { ...config, account: { ...config.account, ...account } };
+      await saveConfig(config, writePath);
+    }
+    const status = toPublicStatus(config, writePath);
+    ctx.ui.notify(status.email ? `Google Drive connected as ${status.email}` : "Google Drive login copied.", "info");
+    ctx.ui.setStatus("gdrive", statusLabel(status));
+    return "done";
+  } catch (error) {
+    ctx.ui.notify(
+      `Copied login could not be refreshed: ${(error as Error).message}. Continuing with a new sign-in.`,
+      "warning",
+    );
+    return "continue";
+  }
+}
+
 async function runSetup(pi: ExtensionAPI, ctx: ExtensionCommandContext) {
   if (!ctx.hasUI) {
     ctx.ui.notify("/gdrive-setup requires interactive mode.", "error");
     return;
   }
 
-  const existing = await readConfig();
-  if (existing) {
+  setActiveCwd(ctx.cwd);
+  const separatePath = projectConfigPath(ctx.cwd);
+  const discovered = await resolveSetupPath(ctx.cwd);
+  let writePath = discovered.writePath;
+
+  if (discovered.existingPath && resolve(discovered.existingPath) !== resolve(separatePath)) {
+    ctx.ui.notify(
+      `Found a Google Drive login above this directory:\n${discovered.existingPath}\n\nA separate login for this directory would be saved to:\n${separatePath}`,
+      "info",
+    );
+    const choice = await ctx.ui.select("Where should this Google Drive login be saved?", [
+      OVERWRITE_LOGIN,
+      SEPARATE_LOGIN,
+    ]);
+    if (!choice) return;
+    writePath = choice === SEPARATE_LOGIN ? separatePath : discovered.existingPath;
+  } else if (discovered.existingPath) {
     const overwrite = await ctx.ui.confirm(
       "Existing Google Drive login",
-      `A local token file already exists. Overwrite it?\n${CONFIG_PATH}`,
+      `A local token file already exists. Overwrite it?\n${discovered.existingPath}`,
     );
     if (!overwrite) return;
+    writePath = discovered.existingPath;
+  } else {
+    ctx.ui.notify(
+      `No Google Drive login found at or above ${ctx.cwd}.\nA new login will be saved to:\n${writePath}`,
+      "info",
+    );
+    if ((await maybeCopyLegacy(ctx, writePath)) === "done") return;
   }
+
+  const preserved = await readConfigFile(writePath);
 
   const clientId = (await ctx.ui.input("Google OAuth Client ID", "...apps.googleusercontent.com"))?.trim();
   if (!clientId) return;
@@ -115,25 +185,25 @@ async function runSetup(pi: ExtensionAPI, ctx: ExtensionCommandContext) {
       redirectUri: listener.redirectUri,
       tokens: {
         ...tokens,
-        refresh_token: tokens.refresh_token ?? existing?.tokens.refresh_token,
+        refresh_token: tokens.refresh_token ?? preserved?.tokens.refresh_token,
       },
     };
-    await saveConfig(config);
+    await saveConfig(config, writePath);
 
     try {
       const account = await driveAboutUser();
       config.account = account;
-      await saveConfig(config);
+      await saveConfig(config, writePath);
     } catch {
       // Account lookup is best-effort; tokens are already stored.
     }
 
-    const status = toPublicStatus(config);
+    const status = toPublicStatus(config, writePath);
     ctx.ui.notify(
       status.email ? `Google Drive connected as ${status.email}` : "Google Drive connected.",
       "info",
     );
-    ctx.ui.setStatus("gdrive", status.email ? `Drive: ${status.email}` : "Drive: connected");
+    ctx.ui.setStatus("gdrive", statusLabel(status));
   } catch (error) {
     ctx.ui.notify(`Google Drive setup failed: ${(error as Error).message}`, "error");
   }
@@ -141,23 +211,35 @@ async function runSetup(pi: ExtensionAPI, ctx: ExtensionCommandContext) {
 
 export function registerCommands(pi: ExtensionAPI): void {
   pi.registerCommand("gdrive-setup", {
-    description: "Connect Google Drive with a personal OAuth client (read-only)",
+    description: "Connect this project's Google Drive with a personal OAuth client (read-only)",
     handler: async (_args, ctx) => {
       await runSetup(pi, ctx);
     },
   });
 
   pi.registerCommand("gdrive-logout", {
-    description: "Delete local Google Drive tokens",
+    description: "Delete the Google Drive login discovered for this directory",
     handler: async (_args, ctx) => {
       if (!ctx.hasUI) {
         ctx.ui.notify("/gdrive-logout requires interactive mode.", "error");
         return;
       }
-      const ok = await ctx.ui.confirm("Disconnect Google Drive", `Delete local tokens?\n${CONFIG_PATH}`);
+      setActiveCwd(ctx.cwd);
+      const existingPath = await findProjectConfigPath(ctx.cwd);
+      if (!existingPath) {
+        ctx.ui.notify(`No Google Drive login found at or above ${ctx.cwd}.`, "info");
+        ctx.ui.setStatus("gdrive", "Drive: run /gdrive-setup");
+        return;
+      }
+      const projectRoot = projectRootFromConfigPath(existingPath);
+      const inherited = resolve(projectRoot) !== resolve(ctx.cwd);
+      const message = inherited
+        ? `This directory is using a login stored above it:\n${existingPath}\n\nDeleting it also disconnects other directories that inherit that file.`
+        : `Delete local tokens?\n${existingPath}`;
+      const ok = await ctx.ui.confirm("Disconnect Google Drive", message);
       if (!ok) return;
       try {
-        await deleteConfig();
+        await deleteConfig(existingPath);
         ctx.ui.notify("Local Google Drive tokens deleted. Revoke app access in your Google Account if you want.", "info");
         ctx.ui.setStatus("gdrive", "Drive: run /gdrive-setup");
       } catch (error) {
@@ -167,9 +249,10 @@ export function registerCommands(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("gdrive-status", {
-    description: "Show Google Drive auth status (no secrets)",
+    description: "Show the Google Drive login discovered for this directory (no secrets)",
     handler: async (_args, ctx) => {
-      const status = toPublicStatus(await readConfig());
+      setActiveCwd(ctx.cwd);
+      const status = await publicStatusFor(ctx.cwd);
       ctx.ui.notify(formatPublicStatus(status), "info");
     },
   });

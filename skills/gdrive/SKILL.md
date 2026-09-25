@@ -11,6 +11,8 @@ Use the `gdrive_*` and `gsheets_read` tools. Do not guess file ids.
 
 If `gdrive_status` says the account is not connected, tell the user to run `/gdrive-setup` in Pi (interactive browser OAuth with their own Google Cloud Desktop client). Do not invent credentials.
 
+The active login is the nearest `.pi/google-drive/oauth.json` at or above the session directory. A parent workspace login covers nested repos. A closer file overrides it. A token in `~/.pi/agent/google-drive/oauth.json` is not used. Do not assume one Google account applies to every repo.
+
 ## Workflow
 
 1. `gdrive_search` with a short text query. Add `mimeType` aliases when useful: `doc`, `sheet`, `slides`, `folder`, `pdf`.
@@ -30,4 +32,4 @@ Raw Drive `q=` operators can go in `q` or in `query` when they look like `name c
 
 ## Privacy
 
-Never print OAuth client secrets, refresh tokens, access tokens, or raw `.env` values. `gdrive_status` is the right way to inspect auth.
+Never print OAuth client secrets, refresh tokens, access tokens, or raw `.env` values. `gdrive_status` is the right way to inspect auth. It includes the config path and whether the login is inherited from a parent directory.

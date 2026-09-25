@@ -83,7 +83,14 @@ describe("startOAuthListener", () => {
       assert.equal(listener.redirectUri.includes(":0/"), false);
       const pending = listener.waitForCode();
       const res = await fetch(`${listener.redirectUri}?state=${state}&code=test-code-1`);
+      const html = await res.text();
       assert.equal(res.ok, true);
+      assert.match(html, /Google Drive connected/);
+      assert.match(html, /You can close this tab and return to Pi\./);
+      assert.match(html, /align-items:\s*center/);
+      assert.match(html, /justify-content:\s*center/);
+      assert.match(html, /text-align:\s*center/);
+      assert.match(html, /ui-sans-serif/);
       assert.equal(await pending, "test-code-1");
     } finally {
       listener.close();

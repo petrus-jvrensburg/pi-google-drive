@@ -26,13 +26,12 @@ import {
   type JsonMap,
 } from "./format.ts";
 import { googleDocToMarkdown } from "./markdown.ts";
+import { setActiveCwd } from "./config-path.ts";
 import {
-  CONFIG_PATH,
   formatPublicStatus,
   getValidConfig,
-  readConfig,
+  publicStatusFor,
   saveConfig,
-  toPublicStatus,
 } from "./oauth.ts";
 import { buildFolderListQuery, buildSearchQuery, quoteSheetName } from "./query.ts";
 import { formatBytes, withTruncationNotice } from "./truncate.ts";
@@ -179,29 +178,28 @@ export function registerTools(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "gdrive_status",
     label: "Google Drive Status",
-    description: "Show Google Drive OAuth status (account, scopes, read-only). Never returns secrets.",
-    promptSnippet: "Check Google Drive auth status without exposing tokens",
-    promptGuidelines: ["Use gdrive_status to check whether Google Drive OAuth is configured. If it is not, tell the user to run /gdrive-setup."],
+    description: "Show Google Drive OAuth status for this project (account, scopes, read-only, config path). Never returns secrets.",
+    promptSnippet: "Check the project Google Drive auth status without exposing tokens",
+    promptGuidelines: [
+      "Use gdrive_status to check whether Google Drive OAuth is configured for this project. The active login is the nearest .pi/google-drive/oauth.json at or above the session directory. If it is not configured, tell the user to run /gdrive-setup.",
+    ],
     parameters: Type.Object({}),
-    async execute() {
+    async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+      setActiveCwd(ctx.cwd);
       try {
-        const config = await readConfig();
-        if (!config) {
-          return toolText(`Google Drive is not connected. Run /gdrive-setup.\nconfig: ${CONFIG_PATH}`, {
-            configured: false,
-            configPath: CONFIG_PATH,
-          });
+        const status = await publicStatusFor(ctx.cwd);
+        if (!status.configured) {
+          return toolText(formatPublicStatus(status), { ...status });
         }
 
         try {
-          await getValidConfig();
+          let config = await getValidConfig(undefined, ctx.cwd);
           const account = await driveAboutUser();
           if (account.email || account.displayName) {
-            config.account = { ...config.account, ...account };
-            await saveConfig(config);
+            config = { ...config, account: { ...config.account, ...account } };
+            await saveConfig(config, status.configPath);
           }
         } catch (error) {
-          const status = toPublicStatus(config);
           return toolText(
             `${formatPublicStatus(status)}\n\nToken check failed: ${sanitizeErrorMessage((error as Error).message)}\nRun /gdrive-setup if this persists.`,
             { ...status, tokenOk: false },
@@ -209,8 +207,8 @@ export function registerTools(pi: ExtensionAPI): void {
           );
         }
 
-        const status = toPublicStatus(config);
-        return toolText(formatPublicStatus(status), { ...status, tokenOk: true });
+        const next = await publicStatusFor(ctx.cwd);
+        return toolText(formatPublicStatus(next), { ...next, tokenOk: true });
       } catch (error) {
         return toolError(error);
       }
@@ -236,7 +234,8 @@ export function registerTools(pi: ExtensionAPI): void {
       pageSize: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_PAGE_SIZE, description: `Results per page (default ${DEFAULT_PAGE_SIZE}, max ${MAX_PAGE_SIZE})` })),
       pageToken: Type.Optional(Type.String({ description: "Pagination token from a previous search" })),
     }),
-    async execute(_toolCallId, params, signal) {
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      setActiveCwd(ctx.cwd);
       try {
         const q = buildSearchQuery({
           query: params.query,
@@ -280,7 +279,8 @@ export function registerTools(pi: ExtensionAPI): void {
       pageSize: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_PAGE_SIZE })),
       pageToken: Type.Optional(Type.String({ description: "Pagination token" })),
     }),
-    async execute(_toolCallId, params, signal) {
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      setActiveCwd(ctx.cwd);
       try {
         const folderId = params.folderId?.trim() || params.driveId?.trim() || "root";
         const q = buildFolderListQuery(folderId);
@@ -319,7 +319,8 @@ export function registerTools(pi: ExtensionAPI): void {
       pageSize: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_PAGE_SIZE })),
       pageToken: Type.Optional(Type.String({ description: "Pagination token" })),
     }),
-    async execute(_toolCallId, params, signal) {
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      setActiveCwd(ctx.cwd);
       try {
         const pageSize = clampPageSize(params.pageSize, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
         const data = await googleJson("/drives", {
@@ -362,7 +363,8 @@ export function registerTools(pi: ExtensionAPI): void {
     parameters: Type.Object({
       fileId: Type.String({ description: "Drive file id" }),
     }),
-    async execute(_toolCallId, params, signal) {
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      setActiveCwd(ctx.cwd);
       try {
         const file = await getFileMetadata(params.fileId, signal);
         const plan = describeReadPlan(file.mimeType ?? "", file.name);
@@ -385,7 +387,8 @@ export function registerTools(pi: ExtensionAPI): void {
     parameters: Type.Object({
       fileId: Type.String({ description: "Drive file id" }),
     }),
-    async execute(_toolCallId, params, signal) {
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      setActiveCwd(ctx.cwd);
       try {
         const file = await getFileMetadata(params.fileId, signal);
         const result = await readFileContent(file, signal);
@@ -420,7 +423,8 @@ export function registerTools(pi: ExtensionAPI): void {
       sheet: Type.Optional(Type.String({ description: "Sheet/tab name when range is omitted" })),
       maxRows: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_SHEET_ROWS, description: `Row cap when range has no end (default ${DEFAULT_SHEET_ROWS})` })),
     }),
-    async execute(_toolCallId, params, signal) {
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      setActiveCwd(ctx.cwd);
       try {
         const maxRows = clampPageSize(params.maxRows, DEFAULT_SHEET_ROWS, MAX_SHEET_ROWS);
         const meta = await listSheetTabs(params.spreadsheetId, signal);

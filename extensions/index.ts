@@ -1,19 +1,19 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { setActiveCwd } from "./config-path.ts";
 import { registerCommands } from "./commands.ts";
 import { registerTools } from "./tools.ts";
-import { readConfig, toPublicStatus } from "./oauth.ts";
+import { publicStatusFor, statusLabel } from "./oauth.ts";
 
 export default function googleDriveExtension(pi: ExtensionAPI) {
   registerCommands(pi);
   registerTools(pi);
 
   pi.on("session_start", async (_event, ctx) => {
-    const status = toPublicStatus(await readConfig());
-    if (status.configured && status.email) {
-      ctx.ui.setStatus("gdrive", `Drive: ${status.email}`);
-    } else if (status.configured) {
-      ctx.ui.setStatus("gdrive", "Drive: connected");
-    } else {
+    try {
+      setActiveCwd(ctx.cwd);
+      const status = await publicStatusFor(ctx.cwd);
+      ctx.ui.setStatus("gdrive", statusLabel(status));
+    } catch {
       ctx.ui.setStatus("gdrive", "Drive: run /gdrive-setup");
     }
   });

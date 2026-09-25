@@ -1,6 +1,6 @@
 # pi-google-drive
 
-Read-only [Pi](https://pi.dev) extension for **Google Drive, Docs, Sheets, and Slides**. After a one-time browser OAuth login, the model can search and read files the signed-in Google account can already see — including Shared Drives.
+Read-only [Pi](https://pi.dev) extension for **Google Drive, Docs, Sheets, and Slides**. After a browser OAuth login for a project, the model can search and read files that Google account can already see — including Shared Drives.
 
 Native `pi.registerTool()` tools, not an MCP proxy. Default scopes are read-only; there are no write tools. See [Limitations](#limitations) before extending it.
 
@@ -52,7 +52,19 @@ You will be asked for:
 - Client secret (optional in the prompt; Desktop clients from Google Cloud include one — paste it)
 - Redirect URI (leave blank to bind `http://127.0.0.1:<ephemeral-port>/oauth2callback`)
 
-Pi opens a browser. Sign in with the Google account whose Drive you want the agent to see. Grant the read-only Drive and Sheets scopes.
+Pi opens a browser. Sign in with the Google account whose Drive this project should see. Grant the read-only Drive and Sheets scopes.
+
+Logins are stored per project, not in one global file. On startup, and again before each Drive call, Pi walks from the session directory upward and uses the nearest:
+
+```text
+.pi/google-drive/oauth.json
+```
+
+The walk does not stop at a git root, so a workspace `.pi` covers nested repos. A closer file overrides the parent. That is how two repos can use two Google accounts.
+
+`/gdrive-setup` writes to the login it found, or to the nearest existing `.pi` directory if none exists yet. If a parent login exists and you are in a nested directory, it asks whether to overwrite that login or save a separate one for the current directory.
+
+A token left at the old path `~/.pi/agent/google-drive/oauth.json` is not used. Setup can copy it into the project file.
 
 Then:
 
@@ -60,9 +72,9 @@ Then:
 /gdrive-status
 ```
 
-That should show the account email, `read-only: yes`, and that a refresh token is stored. It never prints tokens or the client secret.
+That should show the account email, `read-only: yes`, the config path, and whether the login was inherited from a parent directory. It never prints tokens or the client secret.
 
-Logout (local tokens only):
+Logout deletes only the login file discovered for this directory. If that file is above the current directory, the confirm dialog says so, because other directories inherit it.
 
 ```text
 /gdrive-logout
@@ -104,7 +116,7 @@ Current constraints:
 - Bring-your-own Google Cloud **Desktop** OAuth client. This package will not ship a shared client secret.
 - Consent screen in **Testing** only works for listed test users. Unverified apps show Google’s warning; Workspace admins can block them.
 - OAuth loopback callback waits **3 minutes**, then times out.
-- `/gdrive-logout` deletes `~/.pi/agent/google-drive/oauth.json` only. The Google grant remains until the user revokes it.
+- `/gdrive-logout` deletes the discovered `.pi/google-drive/oauth.json` only. The Google grant remains until the user revokes it. A parent login is shared by every directory below it.
 - Scopes: `drive.readonly` and `spreadsheets.readonly`. Docs and Slides go through Drive export. The Docs JSON → Markdown fallback may 403 because `documents.readonly` is not requested; plain-text export is the last resort.
 
 ### IDs, search, and listing
@@ -147,13 +159,16 @@ Keep the tool catalog small.
 
 ## Behavior notes
 
+- The active account is the nearest `.pi/google-drive/oauth.json` at or above the session directory. Startup walks that tree for the footer. Each Drive call walks again, so `/gdrive-setup` is visible without a reload.
 - Visibility matches the signed-in user, including Shared Drives (`supportsAllDrives` / `includeItemsFromAllDrives`). Search defaults to `corpora=allDrives` and retries without that corpora if Google rejects it.
 - Docs → Markdown uses Drive `text/markdown` export, then Docs JSON conversion, then `text/plain`.
 - Shortcuts are followed (capped depth). Folders must be listed with `gdrive_list`, not read.
 
 ## Security
 
-Tokens are stored at `~/.pi/agent/google-drive/oauth.json` with mode `0600`.
+Tokens are stored at `<project>/.pi/google-drive/oauth.json` with mode `0600`. The `google-drive` directory is mode `0700`. Setup also writes a `.gitignore` beside the token file so a normal `git add` does not pick it up. Check `git status` after the first setup anyway.
+
+The old global file `~/.pi/agent/google-drive/oauth.json` is ignored. Do not rely on it.
 
 Never put OAuth client secrets, refresh tokens, or `.env` contents in git, issues, or chat logs.
 
